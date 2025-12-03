@@ -1,0 +1,165 @@
+
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{geometry}
+\geometry{margin=1in}
+\begin{document}
+
+\title{Practical Work 1: TCP File Transfer}
+\author{Report}
+\date{03/12/2025}
+\maketitle
+
+\section{Introduction}
+The goal of Practical Work 1 is to implement a 1--1 file transfer system over TCP/IP using low-level socket programming.
+The system contains two components: a server that receives files and a client that sends files.
+
+\section{Protocol Design}
+Our custom protocol consists of exchanging metadata before sending the actual file content.
+
+\subsection*{Protocol Steps}
+\begin{itemize}
+    \item Client sends filename length, filename, and file size.
+    \item Client streams the file content in fixed-size chunks.
+    \item Server writes received content to disk and replies ``OK''.
+\end{itemize}
+
+\subsection*{Protocol Diagram}
+\begin{verbatim}
+ Client                                  Server
+   |                                        |
+   |------ connect() ---------------------->|
+   |-- send(filename_length) -------------->|
+   |-- send(filename) --------------------->|
+   |-- send(file_size) -------------------->|
+   |-- send(file_content) ----------------->|
+   |<------------ "OK" ---------------------|
+   |------------- close() ----------------->|
+\end{verbatim}
+
+\section{System Architecture}
+The system follows a client--server model.
+
+\subsection*{Architecture Diagram}
+\begin{verbatim}
++-----------------+         TCP         +-----------------+
+|     Client      |  -----------------> |     Server      |
+|  - open file    |                    | - accept()       |
+|  - send file    | <-----------------  | - write to disk |
++-----------------+    ACK/OK msg      +-----------------+
+\end{verbatim}
+
+\section{Implementation}
+
+\section{Server Code}
+\begin{lstlisting}[language=C]
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#define PORT 5000
+#define BUFFER_SIZE 4096
+
+int main() {
+    WSADATA wsa;
+    SOCKET server_fd, client_fd;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+    char buffer[BUFFER_SIZE];
+
+    WSAStartup(MAKEWORD(2,2), &wsa);
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    bind(server_fd, (struct sockaddr*)&address, sizeof(address));
+    listen(server_fd, 1);
+
+    client_fd = accept(server_fd, NULL, NULL);
+
+    int name_len = 0;
+    recv(client_fd, (char*)&name_len, sizeof(name_len), 0);
+
+    char filename[256] = {0};
+    recv(client_fd, filename, name_len, 0);
+
+    long filesize = 0;
+    recv(client_fd, (char*)&filesize, sizeof(filesize), 0);
+
+    FILE *fp = fopen(filename, "wb");
+
+    long received = 0;
+    while (received < filesize) {
+        int n = recv(client_fd, buffer, sizeof(buffer), 0);
+        fwrite(buffer, 1, n, fp);
+        received += n;
+    }
+
+    send(client_fd, "OK", 2, 0);
+    fclose(fp);
+}
+\end{lstlisting}
+
+\section{Client Code}
+\begin{lstlisting}[language=C]
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#define PORT 5000
+#define BUFFER_SIZE 4096
+
+int main() {
+    WSADATA wsa;
+    SOCKET sock;
+    struct sockaddr_in serv_addr;
+    char filename[256];
+    char buffer[BUFFER_SIZE];
+
+    printf("Enter filename to send: ");
+    scanf("%s", filename);
+
+    FILE *fp = fopen(filename, "rb");
+
+    WSAStartup(MAKEWORD(2,2), &wsa);
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+
+    connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+
+    int name_len = strlen(filename);
+    send(sock, (char*)&name_len, sizeof(name_len), 0);
+    send(sock, filename, name_len, 0);
+
+    fseek(fp, 0, SEEK_END);
+    long filesize = ftell(fp);
+    send(sock, (char*)&filesize, sizeof(filesize), 0);
+    fseek(fp, 0, SEEK_SET);
+
+    int bytes;
+    while ((bytes = fread(buffer, 1, BUFFER_SIZE, fp)) > 0) {
+        send(sock, buffer, bytes, 0);
+    }
+
+    char ack[10] = {0};
+    recv(sock, ack, sizeof(ack), 0);
+}
+\end{lstlisting}
+
+\end{document}
+\section{Conclusion}
+The TCP file transfer system demonstrates a basic but effective implementation of network communication using sockets, metadata exchange, and binary file transfer.
+
+\end{document}

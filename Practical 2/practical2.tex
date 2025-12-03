@@ -1,0 +1,305 @@
+\documentclass{article}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{geometry}
+\usepackage{float}
+\geometry{margin=1in}
+
+\title{Practical Work 2: RPC File Transfer}
+\author{Group Report}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+The goal of Practical Work 2 is to upgrade the previous TCP file transfer system to use a \textbf{Remote Procedure Call (RPC)} mechanism [cite: 2290-2291]. Instead of manually managing sockets and data streams, we define a service interface and allow the client to invoke methods on the server as if they were local functions.
+
+This report details the RPC service design, system organization, and the implementation using \textbf{[Tên loại RPC bạn dùng, ví dụ: gRPC / Sun RPC / Python XML-RPC]}[cite: 2292].
+
+\section{RPC Service Design}
+In this system, the data exchange is defined by an Interface Definition Language (IDL) rather than a raw byte stream protocol.
+
+\subsection{Service Definition (IDL)}
+We defined a service containing a procedure to transfer file data. The file is split into chunks to manage memory efficiently.
+
+\begin{lstlisting}[caption={RPC Interface Definition}, label={lst:idl}]
+// Example: file_transfer.x or service.proto
+service FileTransferService {
+    // Input: filename, data chunk, offset
+    // Output: bytes_written or success status
+    int upload_file_chunk(string filename, binary data, int data_len);
+}
+\end{lstlisting}
+
+\subsection{RPC Flow Diagram}
+The calling sequence abstracts the network details:
+
+\begin{verbatim}
+ Client App               Client Stub             Server Skeleton           Server App
+     |                         |                        |                        |
+     |--- upload_chunk() ----->|                        |                        |
+     |                         |--- (Marshaling) ------>|                        |
+     |                         |      Network           |--- (Unmarshaling) ---->|
+     |                         |      Message           |                        |
+     |                         |                        |--- upload_chunk() ---->|
+     |                         |                        |                        |
+     |                         |                        |<-- return status ------|
+     |                         |<-- (Marshaling) -------|                        |
+     |                         |      Network           |                        |
+     |<-- return result -------|      Message           |                        |
+     |                         |                        |                        |
+\end{verbatim}
+
+\section{System Organization}
+The system consists of the client, the server, and the generated middleware code (Stubs and Skeletons)[cite: 2296].
+
+\subsection{Architecture Diagram}
+Unlike the direct socket connection in PW1, PW2 relies on the RPC Middleware.
+
+\begin{verbatim}
++-------------------+                          +-------------------+
+|   Client Code     |                          |    Server Code    |
+| (Calls functions) |                          | (Implements logic)|
++-------------------+                          +-------------------+
+        |                                                ^
+        v                                                |
++-------------------+                          +-------------------+
+|    Client Stub    | <---- RPC Protocol ----> |  Server Skeleton  |
+| (Generated Code)  |       (TCP/HTTP)         | (Generated Code)  |
++-------------------+                          +-------------------+
+\end{verbatim}
+
+\section{Implementation}
+
+\subsection{Server Implementation}
+The server implements the logic defined in the IDL. It receives chunks of data and writes them to the disk.
+
+\begin{lstlisting}[language=C, caption={Server Logic Implementation}]
+// Example Implementation
+int * upload_file_chunk_1_svc(file_chunk *argp, struct svc_req *rqstp) {
+    static int result;
+
+    FILE *fp;
+    fp = fopen(argp->filename, "ab"); 
+
+    if (fp != NULL) {
+        fwrite(argp->data.data_val, 1, argp->data.data_len, fp);
+        fclose(fp);
+        result = 1;
+    } else {
+        result = 0;
+    }
+
+    return &result;
+}
+\end{lstlisting}
+
+\subsection{Client Implementation}
+The client reads the file from the disk and invokes the remote procedure iteratively.
+
+\begin{lstlisting}[language=C, caption={Client Loop Implementation}]
+// Example Client Logic
+void file_transfer_prog_1(char *host, char *filename) {
+    CLIENT *clnt;
+    int  *result;
+    file_chunk  chunk;
+
+    clnt = clnt_create(host, FILE_TRANSFER_PROG, FILE_TRANSFER_VERS, "tcp");
+
+    FILE *fp = fopen(filename, "rb");
+
+    while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, fp)) > 0) {
+        chunk.filename = filename;
+        chunk.data.data_len = bytes_read;
+        chunk.data.data_val = buffer;
+
+        result = upload_file_chunk_1(&chunk, clnt);
+
+        if (*result == 0) {
+            printf("Error uploading chunk\n");
+            break;
+        }
+    }
+
+    fclose(fp);
+    clnt_destroy(clnt);
+}
+\end{lstlisting}
+
+\section{Group Work Division}
+[cite: 2298]
+\begin{itemize}
+    \item \textbf{Student A:} Defined IDL structure and generated the stubs/skeletons.
+    \item \textbf{Student B:} Implemented the Server logic.
+    \item \textbf{Student C:} Implemented the Client logic and wrote report.
+\end{itemize}
+
+\section{Conclusion}
+By migrating from raw sockets to RPC, we simplified the communication code.
+
+
+
+\section{Appendix: Full Source Code}
+
+\subsection{Client Code (Custom RPC over TCP)}
+\begin{lstlisting}[language=C]
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include "rpc_stub.h"
+
+#pragma comment(lib, "ws2_32.lib")
+
+#define PORT 5000
+#define BUFFER_SIZE 4096
+
+int main() {
+    WSADATA wsa;
+    SOCKET sock;
+    struct sockaddr_in serv;
+    char filename[256];
+    char buffer[BUFFER_SIZE];
+
+    printf("Enter filename: ");
+    scanf("%s", filename);
+
+    FILE *fp = fopen(filename, "rb");
+    if (!fp) { printf("File not found.\n"); return 1; }
+
+    WSAStartup(MAKEWORD(2,2), &wsa);
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+
+    serv.sin_family = AF_INET;
+    serv.sin_port = htons(PORT);
+    inet_pton(AF_INET, "127.0.0.1", &serv.sin_addr);
+
+    connect(sock, (struct sockaddr*)&serv, sizeof(serv));
+
+    rpc_sendFilename(sock, filename);
+
+    int n;
+    while ((n = fread(buffer, 1, BUFFER_SIZE, fp)) > 0) {
+        rpc_sendChunk(sock, buffer, n);
+    }
+
+    rpc_endFile(sock);
+
+    char ack[10] = {0};
+    recv(sock, ack, sizeof(ack), 0);
+    printf("[CLIENT] Server ACK: %s\n", ack);
+
+    fclose(fp);
+    closesocket(sock);
+    WSACleanup();
+    return 0;
+}
+\end{lstlisting}
+
+\subsection{rpc\_stub.c}
+\begin{lstlisting}[language=C]
+typedef struct {
+    int rpc_id;
+    int payload_size;
+} RpcHeader;
+
+void rpc_sendFilename(SOCKET sock, char *name) {
+    RpcHeader h = {1, strlen(name)};
+    send(sock, (char*)&h, sizeof(h), 0);
+    send(sock, name, strlen(name), 0);
+}
+
+void rpc_sendChunk(SOCKET sock, char *buf, int size) {
+    RpcHeader h = {2, size};
+    send(sock, (char*)&h, sizeof(h), 0);
+    send(sock, buf, size, 0);
+}
+
+void rpc_endFile(SOCKET sock) {
+    RpcHeader h = {3, 0};
+    send(sock, (char*)&h, sizeof(h), 0);
+}
+\end{lstlisting}
+
+\subsection{Server Code}
+\begin{lstlisting}[language=C]
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#pragma comment(lib, "ws2_32.lib")
+
+#define PORT 5000
+#define BUFFER_SIZE 4096
+
+typedef struct {
+    int rpc_id;
+    int payload_size;
+} RpcHeader;
+
+FILE *fp = NULL;
+
+void handle_rpc(SOCKET client, RpcHeader h) {
+    char buffer[BUFFER_SIZE];
+
+    if (h.rpc_id == 1) {
+        recv(client, buffer, h.payload_size, 0);
+        buffer[h.payload_size] = '\0';
+        printf("[SERVER] File name: %s\n", buffer);
+        fp = fopen(buffer, "wb");
+    }
+    else if (h.rpc_id == 2) {
+        recv(client, buffer, h.payload_size, 0);
+        fwrite(buffer, 1, h.payload_size, fp);
+    }
+    else if (h.rpc_id == 3) {
+        fclose(fp);
+        printf("[SERVER] File saved.\n");
+        send(client, "OK", 2, 0);
+    }
+}
+
+int main() {
+    WSADATA wsa;
+    SOCKET server_fd, client_fd;
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+
+    WSAStartup(MAKEWORD(2,2), &wsa);
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(PORT);
+
+    bind(server_fd, (struct sockaddr*)&address, sizeof(address));
+    listen(server_fd, 1);
+
+    printf("[SERVER] Waiting for connection...\n");
+    client_fd = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+    printf("[SERVER] Client connected.\n");
+
+    RpcHeader header;
+
+    while (1) {
+        int n = recv(client_fd, (char*)&header, sizeof(header), 0);
+        if (n <= 0) break;
+        handle_rpc(client_fd, header);
+    }
+
+    closesocket(client_fd);
+    closesocket(server_fd);
+    WSACleanup();
+    return 0;
+}
+\end{lstlisting}
+
+
+
+\end{document}
